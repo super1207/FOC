@@ -17,7 +17,7 @@ SetMotorDir(&motor,0);// 1 or 0,default 0
 
 in pwm timer interrupt function(freq:12K)
 ```c
-uint16_t adc_u,adc_v;
+int32_t adc_u,adc_v;
 ...
 // read adc,format to Q12(-4096~4096)
 ...

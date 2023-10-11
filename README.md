@@ -30,3 +30,7 @@ TIM1->CCR1 = motor.PWMOut[0];
 TIM1->CCR2 = motor.PWMOut[1];
 TIM1->CCR3 = motor.PWMOut[2];
 ```
+## ..
+![image](https://github.com/super1207/FOC/assets/30586004/b9abf442-6cf1-443c-b901-45823610e5f8)
+![image](https://github.com/super1207/FOC/assets/30586004/47f3a4e8-000a-4547-8959-06532046b325)
+

@@ -244,6 +244,19 @@ void MotorStep(MotorParams * motorParams)
 	// ipark
 	motorParams->Valpha = _IQmpy(vd_out,cos_val) - _IQmpy(vq_out,sin_val);
 	motorParams->Vbeta  = _IQmpy(vq_out,cos_val) + _IQmpy(vd_out,sin_val);
+
+	// Circle limiting logic to ensure vector doesn't exceed boundary
+	int32_t v_mag_square = _IQmpy(motorParams->Valpha, motorParams->Valpha) + _IQmpy(motorParams->Vbeta, motorParams->Vbeta);
+	int32_t v_max_square = 32767 * 32767 / 32768; // Max value squared in Q15 format
+	
+	if (v_mag_square > v_max_square) {
+		// Vector exceeds limit, need to scale
+		// Using an approximation for square root scaling
+		int32_t scale_factor = _IQmpy(v_max_square, 32768 / 2) / (v_mag_square / 2); // Avoid overflow
+		motorParams->Valpha = _IQmpy(motorParams->Valpha, scale_factor);
+		motorParams->Vbeta = _IQmpy(motorParams->Vbeta, scale_factor);
+	}
+
 	// svpwm
 	int32_t Ta,Tb,Tc;
 	int32_t tmp1= motorParams->Vbeta;

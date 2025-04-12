@@ -13,9 +13,11 @@
 #include <assert.h>
 
 
-#define   _IQmpy(A,B)    (int32_t)(((A)*(B))>>15)
+#define   _IQmpy(A,B)    (int32_t)(((int64_t)(A)*(B))>>15) // Use 64-bit intermediate for safety
 #define   _IQmpy2(A)     (int32_t)((A)<<1)
 #define   _IQdiv2(A)     (int32_t)((A)>>1)
+#define   Q15(A)         (int32_t)((A)*32768.0)
+#define   VMAX_Q15       32767 // Represents 1.0
 
 
 const static int16_t IQSin_Cos_Table[256]={\
@@ -51,6 +53,35 @@ const static int16_t IQSin_Cos_Table[256]={\
 	0x7E9C,0x7EB9,0x7ED5,0x7EEF,0x7F09,0x7F21,0x7F37,0x7F4D,\
 	0x7F61,0x7F74,0x7F86,0x7F97,0x7FA6,0x7FB4,0x7FC1,0x7FCD,\
 	0x7FD8,0x7FE1,0x7FE9,0x7FF0,0x7FF5,0x7FF9,0x7FFD,0x7FFE};
+
+
+// Integer Square Root (Babylonian method for 32-bit unsigned)
+static uint32_t isqrt32(uint32_t n) {
+    if (n == 0) return 0;
+    uint32_t x = n;
+    uint32_t y = (x + 1) >> 1;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) >> 1;
+    }
+    return x;
+}
+
+// Q15 Division: Result = A / B
+static int32_t IQdiv(int32_t A, int32_t B) {
+    if (B == 0) {
+        // Handle division by zero, return max value or error
+        return (A >= 0) ? INT32_MAX : INT32_MIN;
+    }
+    int64_t temp = (int64_t)A << 15;
+    // Perform rounding
+    if ((temp >= 0 && B >= 0) || (temp < 0 && B < 0)) {
+        temp += B / 2;
+    } else {
+        temp -= B / 2;
+    }
+    return (int32_t)(temp / B);
+}
 
 
 static int32_t IQsat( int32_t Uint,int32_t  U_max, int32_t U_min)
@@ -245,17 +276,38 @@ void MotorStep(MotorParams * motorParams)
 	motorParams->Valpha = _IQmpy(vd_out,cos_val) - _IQmpy(vq_out,sin_val);
 	motorParams->Vbeta  = _IQmpy(vq_out,cos_val) + _IQmpy(vd_out,sin_val);
 
-	// Circle limiting logic to ensure vector doesn't exceed boundary
-	int32_t v_mag_square = _IQmpy(motorParams->Valpha, motorParams->Valpha) + _IQmpy(motorParams->Vbeta, motorParams->Vbeta);
-	int32_t v_max_square = 32767 * 32767 / 32768; // Max value squared in Q15 format
-	
-	if (v_mag_square > v_max_square) {
-		// Vector exceeds limit, need to scale
-		// Using an approximation for square root scaling
-		int32_t scale_factor = _IQmpy(v_max_square, 32768 / 2) / (v_mag_square / 2); // Avoid overflow
-		motorParams->Valpha = _IQmpy(motorParams->Valpha, scale_factor);
-		motorParams->Vbeta = _IQmpy(motorParams->Vbeta, scale_factor);
+	// Circle limiting logic
+	// Valpha_sq and Vbeta_sq are Q15 representing V^2 * 2
+	int32_t Valpha_sq = _IQmpy(motorParams->Valpha, motorParams->Valpha);
+	int32_t Vbeta_sq  = _IQmpy(motorParams->Vbeta, motorParams->Vbeta);
+	// v_mag_square_x2_q15 represents 2 * Mag^2 in Q15 format. Max value ~65534 (represents 2.0)
+	uint32_t v_mag_square_x2_q15 = (uint32_t)Valpha_sq + (uint32_t)Vbeta_sq;
+	// Limit is 2 * Vmax^2. If Vmax = 1.0 (Q15=32767), then limit is 2.0 (Q15=65534).
+	// Check if 2*Mag^2 > 2*Vmax^2 (approximately)
+	// Using 65534 as the limit for 2.0 in Q15
+	uint32_t v_max_square_x2_q15 = 65534; // Represents 2.0 * Vmax^2 where Vmax=1.0
+
+	if (v_mag_square_x2_q15 > v_max_square_x2_q15) {
+		// Calculate Magnitude in Q15: Mag_q15 = sqrt((v_mag_square_x2_q15 / 2) * 32768)
+		// Mag_q15 = isqrt32( (v_mag_square_x2_q15 >> 1) << 15 )
+		uint32_t temp_for_sqrt = (v_mag_square_x2_q15 >> 1) << 15; // Q30 representation of Mag^2
+		int32_t mag_q15 = (int32_t)isqrt32(temp_for_sqrt); // Result is Q15 magnitude
+
+		if (mag_q15 > 0) { // Avoid division by zero if magnitude is somehow zero
+			// Calculate scaling factor: scale = Vmax_q15 / Mag_q15
+			int32_t scale_factor = IQdiv(VMAX_Q15, mag_q15); // VMAX_Q15 is 32767 (1.0)
+
+			// Apply scaling factor
+			motorParams->Valpha = _IQmpy(motorParams->Valpha, scale_factor);
+			motorParams->Vbeta  = _IQmpy(motorParams->Vbeta, scale_factor);
+		} else {
+            // Handle potential error case where magnitude is zero but exceeded limit?
+            // This shouldn't happen mathematically, but as a safeguard:
+            motorParams->Valpha = 0;
+            motorParams->Vbeta = 0;
+        }
 	}
+
 
 	// svpwm
 	int32_t Ta,Tb,Tc;
